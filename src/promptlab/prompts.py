@@ -15,6 +15,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from promptlab.schemas import (
+    OUTPUT_SCHEMAS,
+    TaskName,
+    schema_description,
+)
+
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "prompts"
 
 DOCUMENT_MARKER_CLOSE = "</document>"
@@ -125,3 +131,51 @@ def render_user(
         return values[match.group(1)]
 
     return _PLACEHOLDER.sub(replace, template.user_template)
+
+
+TASK_PROMPTS: dict[TaskName, tuple[str, str]] = {
+    "summarization": ("summarize", "v1"),
+    "extraction": ("extract", "v2"),
+    "triage": ("triage", "v1"),
+}
+
+
+class BuiltPrompt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prompt_id: str
+    version: str
+    system: str
+    user_content: str
+
+
+def prompt_spec(task: TaskName) -> tuple[str, str]:
+    return TASK_PROMPTS[task]
+
+
+def prompt_version(task: TaskName, model_name: str) -> str:
+    """Recorded prompt id.version. Qwen rows are the same files (transfer)."""
+    prompt_id, version = TASK_PROMPTS[task]
+    recorded = f"{prompt_id}.{version}"
+    if model_name != "mistral":
+        return f"{recorded} transfer"
+    return recorded
+
+
+def build_prompt(task: TaskName, model_name: str, document_text: str) -> BuiltPrompt:
+    """Render the frozen Day 5 prompt for one task. model_name is unused (transfer)."""
+    del model_name
+    prompt_id, version = TASK_PROMPTS[task]
+    template = load(prompt_id, version)
+    schema = OUTPUT_SCHEMAS[task]
+    user_content = render_user(
+        template,
+        {"schema_description": schema_description(schema)},
+        document_text,
+    )
+    return BuiltPrompt(
+        prompt_id=prompt_id,
+        version=version,
+        system=template.system,
+        user_content=user_content,
+    )
