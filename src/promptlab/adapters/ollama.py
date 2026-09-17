@@ -26,8 +26,9 @@ TRANSIENT_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 class OllamaAdapter:
     provider = "ollama"
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, thinking_enabled: bool | None = None) -> None:
         self.model_id = model_id
+        self.thinking_enabled = thinking_enabled
         self._settings = Settings.from_env()
 
     def complete(self, request: CompletionRequest, run_id: str) -> CompletionResult:
@@ -79,17 +80,20 @@ class OllamaAdapter:
         output_tokens = 0
 
         try:
+            request_payload: dict[str, Any] = {
+                "model": self.model_id,
+                "prompt": f"{request.system}\n\n{request.user_content}",
+                "stream": False,
+                "options": {
+                    "temperature": request.temperature,
+                    "num_predict": request.max_output_tokens,
+                },
+            }
+            if self.thinking_enabled is not None:
+                request_payload["think"] = self.thinking_enabled
             response = httpx.post(
                 f"{self._settings.ollama_base_url}/api/generate",
-                json={
-                    "model": self.model_id,
-                    "prompt": f"{request.system}\n\n{request.user_content}",
-                    "stream": False,
-                    "options": {
-                        "temperature": request.temperature,
-                        "num_predict": request.max_output_tokens,
-                    },
-                },
+                json=request_payload,
                 timeout=180.0,
             )
             latency_ms = int(round((time.perf_counter() - started) * 1000))

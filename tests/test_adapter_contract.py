@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import get_args
 
 import httpx
@@ -94,13 +95,47 @@ def test_completion_result_contract_is_exact() -> None:
 
 
 def test_same_ollama_adapter_class_can_target_both_models() -> None:
-    mistral = OllamaAdapter(model_id=_model_id("mistral"))
-    qwen = OllamaAdapter(model_id=_model_id("qwen"))
+    settings = Settings.from_env()
+    mistral_config = settings.models["mistral"]
+    qwen_config = settings.models["qwen"]
+    mistral = OllamaAdapter(
+        model_id=mistral_config.model_id,
+        thinking_enabled=mistral_config.thinking_enabled,
+    )
+    qwen = OllamaAdapter(
+        model_id=qwen_config.model_id,
+        thinking_enabled=qwen_config.thinking_enabled,
+    )
 
     assert type(mistral) is type(qwen)
     assert mistral.provider == "ollama"
     assert qwen.provider == "ollama"
     assert mistral.model_id != qwen.model_id
+    assert mistral.thinking_enabled is None
+    assert qwen.thinking_enabled is False
+
+
+def test_qwen_request_explicitly_disables_thinking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured_json: object = None
+
+    def fake_post(*args: object, **kwargs: object) -> FakeResponse:
+        nonlocal captured_json
+        captured_json = kwargs.get("json")
+        return FakeResponse(text="summary")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    config = Settings.from_env().models["qwen"]
+    adapter = OllamaAdapter(
+        model_id=config.model_id,
+        thinking_enabled=config.thinking_enabled,
+    )
+    adapter.complete(_request(), "qwen-no-thinking")
+
+    assert isinstance(captured_json, dict)
+    assert captured_json["think"] is False
 
 
 class FakeResponse:
@@ -129,12 +164,14 @@ class FakeResponse:
         return self._payload
 
 
-def test_success_maps_ollama_usage_into_call_record(monkeypatch, tmp_path) -> None:
+def test_success_maps_ollama_usage_into_call_record(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     calls = 0
 
-    def fake_post(*args, **kwargs) -> FakeResponse:
+    def fake_post(*args: object, **kwargs: object) -> FakeResponse:
         nonlocal calls
         calls += 1
         return FakeResponse(
@@ -165,14 +202,14 @@ def test_success_maps_ollama_usage_into_call_record(monkeypatch, tmp_path) -> No
 
 
 def test_transient_failure_retries_and_records_each_attempt(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
     calls = 0
 
-    def flaky_post(*args, **kwargs) -> FakeResponse:
+    def flaky_post(*args: object, **kwargs: object) -> FakeResponse:
         nonlocal calls
         calls += 1
         if calls < 3:
@@ -180,7 +217,10 @@ def test_transient_failure_retries_and_records_each_attempt(
         return FakeResponse(text="eventual success")
 
     monkeypatch.setattr(httpx, "post", flaky_post)
-    monkeypatch.setattr("time.sleep", lambda _: None)
+    def _no_sleep(_seconds: object) -> None:
+        return None
+
+    monkeypatch.setattr("time.sleep", _no_sleep)
 
     adapter = OllamaAdapter(model_id=_model_id("mistral"))
     result = adapter.complete(_request(), "retry-run")
@@ -193,12 +233,14 @@ def test_transient_failure_retries_and_records_each_attempt(
     assert result.records[2].error_type is None
 
 
-def test_permanent_failure_is_not_retried(monkeypatch, tmp_path) -> None:
+def test_permanent_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     calls = 0
 
-    def bad_request(*args, **kwargs) -> FakeResponse:
+    def bad_request(*args: object, **kwargs: object) -> FakeResponse:
         nonlocal calls
         calls += 1
         return FakeResponse(status_code=400, text="bad request")
@@ -216,12 +258,14 @@ def test_permanent_failure_is_not_retried(monkeypatch, tmp_path) -> None:
     assert result.records[0].error_type == PermanentProviderError.__name__
 
 
-def test_truncation_is_recorded_and_not_retried(monkeypatch, tmp_path) -> None:
+def test_truncation_is_recorded_and_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     calls = 0
 
-    def truncated(*args, **kwargs) -> FakeResponse:
+    def truncated(*args: object, **kwargs: object) -> FakeResponse:
         nonlocal calls
         calls += 1
         return FakeResponse(
