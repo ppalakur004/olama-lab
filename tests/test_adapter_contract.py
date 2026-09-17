@@ -95,13 +95,47 @@ def test_completion_result_contract_is_exact() -> None:
 
 
 def test_same_ollama_adapter_class_can_target_both_models() -> None:
-    mistral = OllamaAdapter(model_id=_model_id("mistral"))
-    qwen = OllamaAdapter(model_id=_model_id("qwen"))
+    settings = Settings.from_env()
+    mistral_config = settings.models["mistral"]
+    qwen_config = settings.models["qwen"]
+    mistral = OllamaAdapter(
+        model_id=mistral_config.model_id,
+        thinking_enabled=mistral_config.thinking_enabled,
+    )
+    qwen = OllamaAdapter(
+        model_id=qwen_config.model_id,
+        thinking_enabled=qwen_config.thinking_enabled,
+    )
 
     assert type(mistral) is type(qwen)
     assert mistral.provider == "ollama"
     assert qwen.provider == "ollama"
     assert mistral.model_id != qwen.model_id
+    assert mistral.thinking_enabled is None
+    assert qwen.thinking_enabled is False
+
+
+def test_qwen_request_explicitly_disables_thinking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    captured_json: object = None
+
+    def fake_post(*args: object, **kwargs: object) -> FakeResponse:
+        nonlocal captured_json
+        captured_json = kwargs.get("json")
+        return FakeResponse(text="summary")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    config = Settings.from_env().models["qwen"]
+    adapter = OllamaAdapter(
+        model_id=config.model_id,
+        thinking_enabled=config.thinking_enabled,
+    )
+    adapter.complete(_request(), "qwen-no-thinking")
+
+    assert isinstance(captured_json, dict)
+    assert captured_json["think"] is False
 
 
 class FakeResponse:

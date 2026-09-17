@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from promptlab.records import OutputRecord, ScoreRecord, UsageRecord
-from promptlab.report import write_reports
+from promptlab.report import _usage_summary, write_reports
 
 
 def test_report_is_generated_from_records(tmp_path: Path) -> None:
@@ -62,9 +62,50 @@ def test_report_is_generated_from_records(tmp_path: Path) -> None:
     )
     assert "1/1" in report.read_text(encoding="utf-8")
     assert "triage-mistral-v1" in report.read_text(encoding="utf-8")
-    assert "Call observations" in report.read_text(encoding="utf-8")
+    assert "Latency n" in report.read_text(encoding="utf-8")
     assert "production-reliability claim" in report.read_text(encoding="utf-8")
     assert "mistral" in decision.read_text(encoding="utf-8")
+
+
+def test_usage_summary_sums_attempts_into_case_latency() -> None:
+    records = [
+        UsageRecord(
+            run_id="demo",
+            task="summarization",
+            case_id="S01",
+            model_name="mistral",
+            model_id="mistral:7b",
+            prompt_version="summarize.v1",
+            attempt=1,
+            kind="primary",
+            status="schema_invalid",
+            prompt_tokens=100,
+            completion_tokens=25,
+            latency_ms=125.0,
+            cost_usd=Decimal("0"),
+        ),
+        UsageRecord(
+            run_id="demo",
+            task="summarization",
+            case_id="S01",
+            model_name="mistral",
+            model_id="mistral:7b",
+            prompt_version="summarize.v1",
+            attempt=1,
+            kind="repair",
+            status="success",
+            prompt_tokens=110,
+            completion_tokens=20,
+            latency_ms=75.0,
+            cost_usd=Decimal("0"),
+        ),
+    ]
+
+    summary = _usage_summary(records)
+
+    assert summary[2] == "200 ms"
+    assert summary[3] == "200 ms"
+    assert summary[4] == "1"
 
 
 def test_report_preserves_existing_decision_and_excludes_failed_output_scores(

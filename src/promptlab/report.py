@@ -79,7 +79,7 @@ def _metric_text(records: Sequence[ScoreRecord]) -> str:
 def _usage_summary(
     records: Sequence[UsageRecord],
 ) -> tuple[str, str, str, str, str, str]:
-    """Return token, latency, observation, and retry summaries."""
+    """Return token, end-to-end case latency, observation, and retry summaries."""
 
     if not records:
         return "—", "—", "—", "—", "0", "0"
@@ -89,11 +89,11 @@ def _usage_summary(
         int(getattr(row, "completion_tokens", 0) or 0) for row in records
     )
 
-    latencies = [
-        float(row.latency_ms)
-        for row in records
-        if getattr(row, "latency_ms", None) is not None
-    ]
+    latency_by_case: dict[str, float] = defaultdict(float)
+    for row in records:
+        if getattr(row, "latency_ms", None) is not None:
+            latency_by_case[str(row.case_id)] += float(row.latency_ms)
+    latencies = list(latency_by_case.values())
 
     if latencies:
         median_latency = f"{_fmt_number(float(median(latencies)))} ms"
@@ -187,7 +187,7 @@ def _write_report(
                 f"## {task.title()}",
                 "",
                 "| Model | Prompt | Valid outputs | Metrics | Input tokens | "
-                "Output tokens | Median latency | Max latency | Call observations | "
+                "Output tokens | Median case latency | Max case latency | Latency n | "
                 "Repairs | Retries | Final failures |",
                 "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | "
                 "---: | ---: | ---: |",
@@ -241,7 +241,9 @@ def _write_report(
             "- Failed structured outputs remain visible in the 12-case experiment and "
             "are excluded from deterministic field-metric denominators.",
             "- Measured on local Ollama in this environment (`mistral:7b`, `qwen3:8b`), "
-            "temperature `0.0`. Local latency depends on the current machine and load.",
+            "temperature `0.0`; Qwen used `think=false`. Case latency sums all recorded "
+            "attempt latencies for an evaluation. Local latency depends on the current "
+            "machine and load.",
             "- These directional results do not make a production-reliability claim.",
             "- Local Ollama provider/API charge is `$0.00`; token usage and latency still "
             "represent real operational work.",

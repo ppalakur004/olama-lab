@@ -319,7 +319,11 @@ def main() -> None:
     validated_by_task_model: dict[tuple[TaskName, str], dict[str, StrictModel]] = defaultdict(dict)
     labels_by_task: dict[TaskName, list[GoldLabel]] = defaultdict(list)
     adapters = {
-        name: OllamaAdapter(model_id=settings.models[name].model_id) for name in selected_models
+        name: OllamaAdapter(
+            model_id=settings.models[name].model_id,
+            thinking_enabled=settings.models[name].thinking_enabled,
+        )
+        for name in selected_models
     }
 
     for task in selected_tasks:
