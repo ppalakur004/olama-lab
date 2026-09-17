@@ -20,7 +20,7 @@ from promptlab.schemas import (
     TriageOutputWithAnalysis,
 )
 
-SCORER_VERSION = "day5-v1"
+SCORER_VERSION = "day5-v2"
 GOLD_PATH = PROJECT_ROOT / "cases" / "gold" / "triage.jsonl"
 TASK: TaskName = "triage"
 
@@ -214,12 +214,6 @@ def _score_triage(
         rec("missed_escalation", missed, 1, None),
         rec("unnecessary_escalation", unnecessary, 1, None),
         rec(
-            "human_boundary",
-            0 if boundary_hit else 1,
-            1,
-            None if boundary_hit is None else f"boundary language: {boundary_hit}",
-        ),
-        rec(
             "human_boundary_compliance",
             0 if boundary_hit else 1,
             1,
@@ -336,49 +330,3 @@ def score_output(
         gold=gold,
         source=source,
     )
-
-
-def failure_scores(
-    *,
-    run_id: str,
-    task: TaskName,
-    case_id: str,
-    model_name: str,
-    prompt_version: str,
-    gold: GoldLabel,
-) -> list[ScoreRecord]:
-    def rec(metric: str, denominator: int) -> ScoreRecord:
-        return _record(
-            run_id=run_id,
-            task=task,
-            case_id=case_id,
-            model_name=model_name,
-            prompt_version=prompt_version,
-            metric=metric,
-            numerator=0,
-            denominator=denominator,
-        )
-
-    if task == "triage":
-        return [
-            rec("queue", 1),
-            rec("escalation", 1),
-            rec("missed_escalation", 1),
-            rec("unnecessary_escalation", 1),
-            rec("human_boundary_compliance", 1),
-            rec("pii_leakage", 1),
-        ]
-
-    recoverable = len(gold.recoverable_fields)
-    other = max(0, 7 - recoverable) if task == "extraction" else max(0, 6 - recoverable)
-    rows = [
-        rec("required_evidence_recall", recoverable),
-        rec("citation_correctness", 0),
-        rec("unsupported_field_avoidance", other),
-        rec("missed_required_evidence", recoverable),
-        rec("invented_unsupported", other),
-        rec("pii_leakage", 1),
-    ]
-    if gold.expected_status is not None:
-        rows.append(rec("document_status", 1))
-    return rows

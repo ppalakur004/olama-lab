@@ -62,4 +62,67 @@ def test_report_is_generated_from_records(tmp_path: Path) -> None:
     )
     assert "1/1" in report.read_text(encoding="utf-8")
     assert "triage-mistral-v1" in report.read_text(encoding="utf-8")
+    assert "Call observations" in report.read_text(encoding="utf-8")
+    assert "production-reliability claim" in report.read_text(encoding="utf-8")
     assert "mistral" in decision.read_text(encoding="utf-8")
+
+
+def test_report_preserves_existing_decision_and_excludes_failed_output_scores(
+    tmp_path: Path,
+) -> None:
+    outputs = [
+        OutputRecord(
+            run_id="demo",
+            task="extraction",
+            case_id="E01",
+            model_name="qwen",
+            model_id="qwen3:8b",
+            prompt_version="extract.v2 transfer",
+            succeeded=True,
+            repairs=0,
+            output={"document_status": "valid"},
+        ),
+        OutputRecord(
+            run_id="demo",
+            task="extraction",
+            case_id="E02",
+            model_name="qwen",
+            model_id="qwen3:8b",
+            prompt_version="extract.v2 transfer",
+            succeeded=False,
+            repairs=1,
+            output=None,
+            error="Validation error",
+        ),
+    ]
+    scores = [
+        ScoreRecord(
+            run_id="demo",
+            task="extraction",
+            case_id="E01",
+            model_name="qwen",
+            prompt_version="extract.v2 transfer",
+            scorer_version="day5-v2",
+            metric="required_evidence_recall",
+            numerator=6,
+            denominator=6,
+        )
+    ]
+    report = tmp_path / "comparison.md"
+    decision = tmp_path / "model-decision.md"
+    decision.write_text("hand-authored decision\n", encoding="utf-8")
+
+    write_reports(
+        run_id="demo",
+        models=["qwen"],
+        usage=[],
+        outputs=outputs,
+        scores=scores,
+        report_path=report,
+        decision_path=decision,
+    )
+
+    text = report.read_text(encoding="utf-8")
+    assert "1/2" in text
+    assert "required_evidence_recall: 6/6" in text
+    assert decision.read_text(encoding="utf-8") == "hand-authored decision\n"

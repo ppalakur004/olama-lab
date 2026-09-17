@@ -187,7 +187,7 @@ def _write_report(
                 f"## {task.title()}",
                 "",
                 "| Model | Prompt | Valid outputs | Metrics | Input tokens | "
-                "Output tokens | Median latency | Max latency | n | "
+                "Output tokens | Median latency | Max latency | Call observations | "
                 "Repairs | Retries | Final failures |",
                 "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | "
                 "---: | ---: | ---: |",
@@ -230,12 +230,19 @@ def _write_report(
             "## Limits",
             "",
             "- Each task uses a fixed set of 12 gold cases. Report counts; do not treat "
-            "one-case gaps as production estimates.",
+            "one-case gaps as production estimates or proof of universal model superiority.",
             "- A row measures that model together with the prompt version shown. "
             "Rows ending in `transfer` are prompt-transfer / unadapted: the same "
             "markdown files as Mistral, not a Qwen-specific rewrite.",
+            "- Adapted-prompt rows compare model + prompt configurations rather than "
+            "models alone. Untested combinations are identified as untested.",
+            "- Untested: Qwen-specific adapted prompts for summarization, extraction, "
+            "and triage.",
+            "- Failed structured outputs remain visible in the 12-case experiment and "
+            "are excluded from deterministic field-metric denominators.",
             "- Measured on local Ollama in this environment (`mistral:7b`, `qwen3:8b`), "
-            "temperature `0.0`. Latency is machine-specific.",
+            "temperature `0.0`. Local latency depends on the current machine and load.",
+            "- These directional results do not make a production-reliability claim.",
             "- Local Ollama provider/API charge is `$0.00`; token usage and latency still "
             "represent real operational work.",
             "",
@@ -336,11 +343,13 @@ def write_reports(
         report_path=Path(report_path),
     )
 
-    _write_decision_scaffold(
-        run_id=run_id,
-        models=models,
-        usage=run_usage,
-        outputs=run_outputs,
-        scores=run_scores,
-        decision_path=Path(decision_path),
-    )
+    decision_path = Path(decision_path)
+    if not decision_path.exists():
+        _write_decision_scaffold(
+            run_id=run_id,
+            models=models,
+            usage=run_usage,
+            outputs=run_outputs,
+            scores=run_scores,
+            decision_path=decision_path,
+        )

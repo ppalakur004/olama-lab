@@ -16,17 +16,22 @@ from promptlab.adapters.ollama import OllamaAdapter
 from promptlab.config import PROJECT_ROOT, ModelConfig, Settings
 from promptlab.corpus import GoldLabel, load_cases, validate_corpus
 from promptlab.prompts import build_prompt, prompt_spec, prompt_version
-from promptlab.records import OutputRecord, ScoreRecord, UsageRecord, append_record
+from promptlab.records import (
+    OutputRecord,
+    ScoreRecord,
+    UsageRecord,
+    append_record,
+    load_records,
+)
 from promptlab.report import write_reports
 from promptlab.rules import VersionCandidate, select_current_version
 from promptlab.schemas import (
     OUTPUT_SCHEMAS,
     PolicyExtraction,
     StrictModel,
-    SummarizationOutput,
     TaskName,
 )
-from promptlab.scoring import SCORER_VERSION, failure_scores, score_output
+from promptlab.scoring import SCORER_VERSION, score_output
 from promptlab.structured import complete_structured
 from promptlab.usage import CallRecord
 
@@ -50,6 +55,11 @@ def _parser() -> argparse.ArgumentParser:
         "--validate-only",
         action="store_true",
         help="Validate configuration and corpus without calling Ollama",
+    )
+    parser.add_argument(
+        "--rescore-only",
+        action="store_true",
+        help="Regenerate deterministic scores and reports from an existing run",
     )
     return parser
 
@@ -115,7 +125,7 @@ def _usage_from_call(
 
 
 def _version_fields(output: StrictModel) -> tuple[str, str] | None:
-    if isinstance(output, SummarizationOutput | PolicyExtraction):
+    if isinstance(output, PolicyExtraction):
         version = output.version
         effective = output.effective_date
         if (
@@ -202,6 +212,72 @@ def _copy_docs(run_id: str, scores_path: Path) -> None:
         shutil.copyfile(scores_path, docs / "day5-scores.jsonl")
 
 
+def _rescore_existing(run_id: str) -> None:
+    """Regenerate derived scores and reports without making model calls."""
+    run_dir = PROJECT_ROOT / "runs" / run_id
+    usage_path = run_dir / "usage.jsonl"
+    outputs_path = run_dir / "outputs.jsonl"
+    scores_path = run_dir / "scores.jsonl"
+    if not usage_path.exists() or not outputs_path.exists():
+        raise SystemExit(f"Existing run evidence not found: {run_dir}")
+
+    usage = load_records(usage_path, UsageRecord)
+    outputs = load_records(outputs_path, OutputRecord)
+    scores_path.write_text("", encoding="utf-8")
+    scores: list[ScoreRecord] = []
+    extraction_outputs: dict[str, dict[str, StrictModel]] = defaultdict(dict)
+    extraction_labels = [gold for _case, gold in load_cases("extraction")]
+
+    tasks: tuple[TaskName, ...] = ("triage", "summarization", "extraction")
+    cases_by_task = {
+        task: {case.id: (case, gold) for case, gold in load_cases(task)}
+        for task in tasks
+    }
+    for record in outputs:
+        if not record.succeeded or record.output is None:
+            continue
+        case, gold = cases_by_task[record.task][record.case_id]
+        parsed = OUTPUT_SCHEMAS[record.task].model_validate(record.output)
+        case_scores = score_output(
+            run_id=run_id,
+            task=record.task,
+            case_id=record.case_id,
+            model_name=record.model_name,
+            prompt_version=record.prompt_version,
+            output=parsed,
+            gold=gold,
+            source=case.document_text,
+        )
+        for score in case_scores:
+            append_record(scores_path, score)
+            scores.append(score)
+        if record.task == "extraction":
+            extraction_outputs[record.model_name][record.case_id] = parsed
+
+    models = sorted({record.model_name for record in outputs})
+    for model_name in models:
+        _add_version_scores(
+            run_id=run_id,
+            task="extraction",
+            model_name=model_name,
+            labels=extraction_labels,
+            outputs=extraction_outputs[model_name],
+            scores_path=scores_path,
+            all_scores=scores,
+        )
+
+    write_reports(
+        run_id=run_id,
+        models=models,
+        usage=usage,
+        outputs=outputs,
+        scores=scores,
+        report_path=PROJECT_ROOT / "reports" / "comparison.md",
+        decision_path=PROJECT_ROOT / "docs" / "model-decision.md",
+    )
+    _copy_docs(run_id, scores_path)
+
+
 def main() -> None:
     args = _parser().parse_args()
     counts = validate_corpus()
@@ -212,6 +288,10 @@ def main() -> None:
     run_id = cast(str | None, args.run_id)
     if run_id is None or not RUN_ID_PATTERN.fullmatch(run_id):
         raise SystemExit("--run-id is required and must use letters, numbers, '.', '_' or '-'")
+    if args.rescore_only:
+        _rescore_existing(run_id)
+        print(f"Rescored existing run: {run_id}")
+        return
     limit = cast(int | None, args.limit)
     if limit is not None and limit < 1:
         raise SystemExit("--limit must be at least 1")
@@ -328,14 +408,9 @@ def main() -> None:
                         output=None,
                         error=error_text,
                     )
-                    case_scores = failure_scores(
-                        run_id=run_id,
-                        task=task,
-                        case_id=case.id,
-                        model_name=model_name,
-                        prompt_version=version,
-                        gold=gold,
-                    )
+                    # A failed structured output remains in OutputRecord and the
+                    # 12-case population, but there is no validated object to score.
+                    case_scores = []
                 append_record(outputs_path, output_record)
                 all_outputs.append(output_record)
                 for score in case_scores:
@@ -347,7 +422,7 @@ def main() -> None:
                 )
 
     for task in selected_tasks:
-        if task == "triage":
+        if task != "extraction":
             continue
         for model_name in selected_models:
             _add_version_scores(
